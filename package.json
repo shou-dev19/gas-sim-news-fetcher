@@ -1,0 +1,15 @@
+{
+  "name": "gas-sim-news-fetcher",
+  "version": "1.0.0",
+  "description": "格安SIM関連の最新ニュースを取得するGASアプリ",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@google/clasp": "^3.3.0"
+  }
+}
