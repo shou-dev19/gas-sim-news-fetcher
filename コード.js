@@ -36,14 +36,13 @@ function getGeminiSummary(title) {
 function fetchSimNews() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
-  // --- 1. キーワードの取得とクエリ作成 ---
+  // --- 1. キーワードの取得 ---
   const keywordSheet = ss.getSheetByName('検索キーワード');
   if (!keywordSheet) {
     console.error("「検索キーワード」シートが見つかりません。シートを作成してください。");
     return;
   }
 
-  // A列のデータをすべて取得（空行を除外）
   const lastRowOfKeywords = keywordSheet.getLastRow();
   if (lastRowOfKeywords === 0) {
     console.warn("キーワードが入力されていません。");
@@ -53,32 +52,45 @@ function fetchSimNews() {
   const keywordValues = keywordSheet.getRange(1, 1, lastRowOfKeywords, 1).getValues();
   const keywords = keywordValues
     .flat()
-    .filter(k => k !== "" && k !== null); // 空文字やnullを除外
+    .filter(k => k !== "" && k !== null);
 
   if (keywords.length === 0) {
     console.warn("有効なキーワードが見つかりませんでした。");
     return;
   }
 
-  // キーワードを " OR " で結合（キーワードにスペースが含まれる場合はダブルクォーテーションで囲む）
-  const query = keywords.map(k => {
-    return k.includes(" ") ? `"${k}"` : k;
-  }).join(' OR ');
-  
-  console.log("生成されたクエリ: " + query);
-
-  // --- 2. ニュース取得処理 ---
+  // --- 2. ニュース取得処理（キーワードを分割して実行） ---
   const sheet = ss.getSheetByName('ニュース一覧');
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`;
+  const BATCH_SIZE = 5; // URL長制限を避けるため5件ずつ処理
+  const allItemsMap = new Map(); // 重複排除用のMap (key: link)
 
-  const response = UrlFetchApp.fetch(url);
-  const xml = response.getContentText();
-  const document = XmlService.parse(xml);
-  const root = document.getRootElement();
-  const channel = root.getChild('channel');
-  const items = channel.getChildren('item');
+  for (let i = 0; i < keywords.length; i += BATCH_SIZE) {
+    const batch = keywords.slice(i, i + BATCH_SIZE);
+    const query = batch.map(k => k.includes(" ") ? `"${k}"` : k).join(' OR ');
+    console.log(`バッチ処理中 (${i + 1}-${Math.min(i + BATCH_SIZE, keywords.length)}): ${query}`);
 
-  // スプレッドシート内の既存のURLを取得（重複チェック用）
+    const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`;
+
+    try {
+      const response = UrlFetchApp.fetch(url);
+      const xml = response.getContentText();
+      const document = XmlService.parse(xml);
+      const root = document.getRootElement();
+      const channel = root.getChild('channel');
+      const items = channel.getChildren('item');
+
+      items.forEach(item => {
+        const link = item.getChildText('link');
+        if (!allItemsMap.has(link)) {
+          allItemsMap.set(link, item);
+        }
+      });
+    } catch (e) {
+      console.error(`検索エラー (クエリ: ${query}): ${e.toString()}`);
+    }
+  }
+
+  // --- 3. 新規記事の抽出と要約生成 ---
   const lastRow = sheet.getLastRow();
   let existingUrls = [];
   if (lastRow > 1) {
@@ -87,6 +99,7 @@ function fetchSimNews() {
 
   const newArticles = [];
   const now = new Date();
+  const items = Array.from(allItemsMap.values());
 
   items.forEach(item => {
     const title = item.getChildText('title');
@@ -96,14 +109,9 @@ function fetchSimNews() {
 
     if (!existingUrls.includes(link)) {
       console.log("要約を生成中: " + title);
-      // ここでGemini APIを呼び出す
       const summary = getGeminiSummary(title);
-      
-      // [取得日, 公開日, タイトル, リンク, 要約, ソース]
       newArticles.push([now, pubDate, title, link, summary, source]);
-      
-      // APIの負荷軽減のため少し待機（必要に応じて）
-      Utilities.sleep(500);
+      Utilities.sleep(500); // API負荷軽減
     }
   });
 
