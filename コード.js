@@ -33,6 +33,29 @@ function getGeminiSummary(title) {
   }
 }
 
+// 除外キーワードを取得する関数
+function getExcludeKeywords(ss) {
+  const defaultExcludes = ["野球", "プロ野球", "ベースボール", "球団", "リーグ", "ドラフト", "甲子園"];
+  const sheet = ss.getSheetByName('除外キーワード');
+  if (!sheet) {
+    console.log("「除外キーワード」シートが見つかりません。デフォルトの除外キーワードを使用します。");
+    return defaultExcludes;
+  }
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow === 0) {
+    console.log("「除外キーワード」シートが空です。デフォルトの除外キーワードを使用します。");
+    return defaultExcludes;
+  }
+
+  const values = sheet.getRange(1, 1, lastRow, 1).getValues();
+  const excludes = values
+    .flat()
+    .filter(k => k !== "" && k !== null);
+
+  return excludes.length > 0 ? excludes : defaultExcludes;
+}
+
 function fetchSimNews() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   
@@ -59,6 +82,11 @@ function fetchSimNews() {
     return;
   }
 
+  // --- 1.5. 除外キーワードの取得 ---
+  const excludeKeywords = getExcludeKeywords(ss);
+  // クエリ用の除外文字列 (例: " -\"野球\" -\"プロ野球\"")
+  const excludeQueryString = excludeKeywords.map(k => ` -"${k}"`).join('');
+
   // --- 2. ニュース取得処理（キーワードを分割して実行） ---
   const sheet = ss.getSheetByName('ニュース一覧');
   const BATCH_SIZE = 5; // URL長制限を避けるため5件ずつ処理
@@ -66,7 +94,9 @@ function fetchSimNews() {
 
   for (let i = 0; i < keywords.length; i += BATCH_SIZE) {
     const batch = keywords.slice(i, i + BATCH_SIZE);
-    const query = batch.map(k => k.includes(" ") ? `"${k}"` : k).join(' OR ');
+    // クエリ全体を括弧で囲み、除外キーワードを付与する
+    const baseQuery = batch.map(k => k.includes(" ") ? `"${k}"` : k).join(' OR ');
+    const query = `(${baseQuery})${excludeQueryString}`;
     console.log(`バッチ処理中 (${i + 1}-${Math.min(i + BATCH_SIZE, keywords.length)}): ${query}`);
 
     const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=ja&gl=JP&ceid=JP:ja`;
@@ -106,6 +136,13 @@ function fetchSimNews() {
     const link = item.getChildText('link');
     const pubDate = new Date(item.getChildText('pubDate'));
     const source = item.getChild('source').getText();
+
+    // タイトルに除外キーワードが含まれるかチェック
+    const shouldExclude = excludeKeywords.some(k => title.includes(k));
+    if (shouldExclude) {
+      console.log("除外キーワードが含まれるためスキップ: " + title);
+      return;
+    }
 
     if (!existingUrls.includes(link)) {
       console.log("要約を生成中: " + title);
